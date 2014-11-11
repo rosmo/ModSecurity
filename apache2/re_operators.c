@@ -27,6 +27,10 @@
 #include <arpa/inet.h>
 #endif
 
+#ifdef WITH_SSDEEP
+#include "fuzzy.h"
+#endif 
+
 #include "libinjection/libinjection.h"
 
 /**
@@ -122,7 +126,7 @@ static int msre_op_ipmatch_param_init(msre_rule *rule, char **error_msg) {
 * \retval 0 On No Match
 */
 static int msre_op_ipmatch_execute(modsec_rec *msr, msre_rule *rule, msre_var *var, char **error_msg) {
-    TreeRoot *rtree = rule->ip_op;
+    TreeRoot *rtree = NULL;
     int res = 0;
 
     if (error_msg == NULL)
@@ -130,10 +134,12 @@ static int msre_op_ipmatch_execute(modsec_rec *msr, msre_rule *rule, msre_var *v
     else
         *error_msg = NULL;
 
-    if (rtree == NULL) {
+    if (rule == NULL || rule->ip_op == NULL) {
         msr_log(msr, 1, "ipMatch Internal Error: ipmatch value is null.");
         return 0;
     }
+
+    rtree = rule->ip_op;
 
     res = tree_contains_ip(msr->mp, rtree, var->value, NULL, error_msg);
 
@@ -143,7 +149,7 @@ static int msre_op_ipmatch_execute(modsec_rec *msr, msre_rule *rule, msre_var *v
     }
     
     if (res > 0) {
-        *error_msg = apr_psprintf(msr->mp, "%s at %s.", *error_msg, var->name);
+        *error_msg = apr_psprintf(msr->mp, "IPmatch: \"%s\" matched at %s.", var->value, var->name);
     }
 
     return res;
@@ -3716,6 +3722,146 @@ static int msre_op_rbl_execute(modsec_rec *msr, msre_rule *rule, msre_var *var, 
     return 0;
 }
 
+/* fuzzyHash */
+static int msre_op_fuzzy_hash_init(msre_rule *rule, char **error_msg)
+{
+#ifdef WITH_SSDEEP
+    struct fuzzy_hash_param_data *param_data;
+    char *file;
+    int param_len,threshold;
+
+    char *data = NULL;
+    char *threshold_str = NULL;
+
+    param_data = apr_palloc(rule->ruleset->mp,
+        sizeof(struct fuzzy_hash_param_data));
+
+    data = apr_pstrdup(rule->ruleset->mp, rule->op_param);
+    threshold_str = data;
+#endif
+
+    if (error_msg == NULL)
+    {
+        return -1;
+    }
+
+    *error_msg = NULL;
+
+#ifdef WITH_SSDEEP
+    /* Sanity check */
+    param_len = strlen(threshold_str);
+    threshold_str = threshold_str + param_len;
+
+    if (param_len < 3)
+    {
+        goto invalid_parameters;
+    }
+
+    while (param_len - 1 > 0 && *threshold_str != ' ')
+    {
+        param_len--;
+        threshold_str--;
+    }
+
+    *threshold_str = '\0';
+    threshold_str++;
+    file = data;
+    threshold = atoi(threshold_str);
+
+    if ((file == NULL) || (is_empty_string(file)) || (threshold > 100) ||
+        (threshold < 1))
+    {
+        goto invalid_parameters;
+    }
+
+    file = resolve_relative_path(rule->ruleset->mp, rule->filename, file);
+    
+    if (!fopen(file, "r"))
+    {
+        *error_msg = apr_psprintf(rule->ruleset->mp, "Not able to open file:" \
+            " %s.", file);
+        return -1;
+    }
+
+
+    param_data->file = file;
+    param_data->threshold = threshold;
+
+    rule->op_param_data = param_data;
+#else
+    rule->op_param_data = NULL;
+
+    return 1;
+#endif
+    return 1;
+
+invalid_parameters:
+    *error_msg = apr_psprintf(rule->ruleset->mp, "Operator @fuzzyHash " \
+        "requires valid parameters. File and threshold.");
+    return -1;
+}
+
+static int msre_op_fuzzy_hash_execute(modsec_rec *msr, msre_rule *rule,
+    msre_var *var, char **error_msg)
+{
+
+#ifdef WITH_SSDEEP
+    char result[FUZZY_MAX_RESULT];
+    struct fuzzy_hash_param_data *param = rule->op_param_data;
+    FILE *fp;
+    char line[1024];
+#endif
+
+    if (error_msg == NULL)
+    {
+        return -1;
+    }
+
+    *error_msg = NULL;
+
+#ifdef WITH_SSDEEP
+    if (fuzzy_hash_buf(var->value, var->value_len, result))
+    {
+        *error_msg = apr_psprintf(rule->ruleset->mp, "Problems generating " \
+            "fuzzy hash.");
+
+        return -1;
+    }
+
+    fp = fopen(param->file, "r");
+    if (!fp)
+    {
+        *error_msg = apr_psprintf(rule->ruleset->mp, "Not able to open " \
+            "fuzzy hash file: %s", param->file);
+
+        return 1;
+    }
+
+    while (read_line(line, sizeof(line), fp))
+    {
+        int i = fuzzy_compare(line, result);
+        if (i >= param->threshold)
+        {
+            *error_msg = apr_psprintf(msr->mp, "Fuzzy hash of %s matched " \
+                "with %s (from: %s). Socore: %d.", var->name, line,
+                param->file, i);
+            return 1;
+        }
+    }
+
+    fclose(fp);
+#else
+    *error_msg = apr_psprintf(rule->ruleset->mp, "ModSecurity was not " \
+        "compiled with ssdeep support.");
+
+    return -1;
+
+#endif
+
+    /* No match. */
+    return 0;
+}
+
 /* inspectFile */
 
 static int msre_op_inspectFile_init(msre_rule *rule, char **error_msg) {
@@ -4548,6 +4694,13 @@ void msre_engine_register_default_operators(msre_engine *engine) {
         "inspectFile",
         msre_op_inspectFile_init,
         msre_op_inspectFile_execute
+    );
+
+    /* fuzzy_hash */
+    msre_engine_op_register(engine,
+        "fuzzyHash",
+        msre_op_fuzzy_hash_init,
+        msre_op_fuzzy_hash_execute
     );
 
     /* validateByteRange */

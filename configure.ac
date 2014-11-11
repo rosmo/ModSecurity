@@ -14,7 +14,7 @@ AC_CONFIG_HEADERS([apache2/modsecurity_config_auto.h])
 AC_CONFIG_AUX_DIR([build])
 AC_PREFIX_DEFAULT([/usr/local/modsecurity])
 
-AM_INIT_AUTOMAKE([-Wall foreign])
+AM_INIT_AUTOMAKE([-Wall foreign subdir-objects])
 m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 
 LT_PREREQ([2.2])
@@ -87,19 +87,19 @@ AH_TEMPLATE([NETBSD],  [Define if the operating system is NetBSD])
 
 case $host in
   *-*-aix*)
-    echo "Checking plataform... Identified as AIX"
+    echo "Checking platform... Identified as AIX"
     aixos=true
     ;;
   *-*-hpux*)
-    echo "Checking plataform... Identified as HPUX"
+    echo "Checking platform... Identified as HPUX"
     hpuxos=true
     ;;
   *-*-darwin*)
-    echo "Checking plataform... Identified as Macintosh OS X"
+    echo "Checking platform... Identified as Macintosh OS X"
     macos=true
     ;;
   *-*-linux*)
-    echo "Checking plataform... Identified as Linux"
+    echo "Checking platform... Identified as Linux"
     linuxos=true
         case "${host_cpu}" in
             s390x)
@@ -108,27 +108,27 @@ case $host in
         esac
     ;;
   *-*-solaris*)
-    echo "Checking plataform... Identified as Solaris"
+    echo "Checking platform... Identified as Solaris"
     solarisos=true
     ;;
   *-*-freebsd*)
-    echo "Checking plataform... Identified as FreeBSD"
+    echo "Checking platform... Identified as FreeBSD"
     freebsdos=true
     ;;
   *-*-netbsd*)
-    echo "Checking plataform... Identified as NetBSD"
+    echo "Checking platform... Identified as NetBSD"
     netbsdos=true
     ;;
   *-*-openbsd*)
-    echo "Checking plataform... Identified as OpenBSD"
+    echo "Checking platform... Identified as OpenBSD"
     openbsdos=true
     ;;
   *-*-kfreebsd*)
-    echo "Checking plataform... Identified as kFreeBSD, treating as linux"
+    echo "Checking platform... Identified as kFreeBSD, treating as linux"
     linuxos=true
     ;;
   *-*-gnu*.*)
-    echo "Checking plataform... Identified as HURD, treating as linux"
+    echo "Checking platform... Identified as HURD, treating as linux"
     linuxos=true
     ;;
        *)
@@ -701,6 +701,8 @@ fi
 # Check for YAJL libs (for JSON body processor)
 CHECK_YAJL()
 #AC_SEARCH_LIBS([yajl_alloc], [yajl])
+CHECK_SSDEEP()
+AC_SEARCH_LIBS([fuzzy_hash_buf], [fuzzy])
 
 AC_CONFIG_FILES([Makefile])
 AC_CONFIG_FILES([tools/Makefile])
