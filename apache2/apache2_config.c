@@ -2213,6 +2213,94 @@ static const char *cmd_rule_engine(cmd_parms *cmd, void *_dcfg, const char *p1)
     return NULL;
 }
 
+static const char *cmd_remote_rules_fail(cmd_parms *cmd, void *_dcfg, const char *p1)
+{
+    directory_config *dcfg = (directory_config *)_dcfg;
+    if (dcfg == NULL) return NULL;
+    if (strncasecmp(p1, "warn", 4) == 0)
+    {
+        remote_rules_fail_action = REMOTE_RULES_WARN_ON_FAIL;
+    }
+    else if (strncasecmp(p1, "abort", 5) == 0)
+    {
+        remote_rules_fail_action = REMOTE_RULES_ABORT_ON_FAIL;
+    }
+    else
+    {
+        return apr_psprintf(cmd->pool, "ModSecurity: Invalid value for " \
+                "SecRemoteRulesFailAction, expected: Abort or Warn.");
+    }
+
+    return NULL;
+}
+
+static const char *cmd_remote_rules(cmd_parms *cmd, void *_dcfg, const char *p1,
+        const char *p2, const char *p3)
+{
+    char *error_msg = NULL;
+    directory_config *dcfg = (directory_config *)_dcfg;
+#ifdef WITH_REMOTE_RULES_SUPPORT
+    int crypto = 0;
+    const char *uri = p2;
+    const char *key = p1;
+#endif
+
+    if (dcfg == NULL) return NULL;
+
+#ifdef WITH_REMOTE_RULES_SUPPORT
+    if (strncasecmp(p1, "crypto", 6) == 0)
+    {
+        uri = p3;
+        key = p2;
+        crypto = 1;
+    }
+
+    if (uri == NULL || key == NULL)
+    {
+        return apr_psprintf(cmd->pool, "ModSecurity: Use SecRemoteRule with " \
+                "Key and URI");
+    }
+
+    if (strncasecmp(uri, "https", 5) != 0) {
+        return apr_psprintf(cmd->pool, "ModSecurity: Invalid URI:" \
+                " '%s'. Expected HTTPS.", uri);
+    }
+
+    // FIXME: Should we handle more then one server at once?
+    if (remote_rules_server != NULL)
+    {
+        return apr_psprintf(cmd->pool, "ModSecurity:  " \
+                "SecRemoteRules cannot be used more than once.");
+    }
+
+    remote_rules_server = apr_pcalloc(cmd->pool, sizeof(msc_remote_rules_server));
+    if (remote_rules_server == NULL)
+    {
+        return apr_psprintf(cmd->pool, "ModSecurity:  " \
+                "SecRemoteRules: Internal failure. Not enougth memory.");
+    }
+
+    remote_rules_server->context = dcfg;
+    remote_rules_server->context_label = apr_pstrdup(cmd->pool, "Unkwon context");
+    remote_rules_server->key = key;
+    remote_rules_server->uri = uri;
+    remote_rules_server->amount_of_rules = 0;
+    remote_rules_server->crypto = crypto;
+
+    msc_remote_add_rules_from_uri(cmd, remote_rules_server, &error_msg);
+    if (error_msg != NULL)
+    {
+        return error_msg;
+    }
+#else
+    return apr_psprintf(cmd->pool, "ModSecurity:  " \
+        "SecRemoteRules: ModSecurity was not compiled with such functionality.");
+#endif
+
+    return NULL;
+}
+
+
 static const char *cmd_status_engine(cmd_parms *cmd, void *_dcfg, const char *p1)
 {
     if (strcasecmp(p1, "on") == 0) {
@@ -3499,6 +3587,23 @@ const command_rec module_directives[] = {
         CMD_SCOPE_ANY,
         "On or Off"
     ),
+
+    AP_INIT_TAKE23 (
+        "SecRemoteRules",
+        cmd_remote_rules,
+        NULL,
+        CMD_SCOPE_ANY,
+        "key and URI to the remote rules"
+    ),
+
+    AP_INIT_TAKE1 (
+        "SecRemoteRulesFailAction",
+        cmd_remote_rules_fail,
+        NULL,
+        CMD_SCOPE_ANY,
+        "Abort or Warn"
+    ),
+
 
     AP_INIT_TAKE1 (
         "SecXmlExternalEntity",

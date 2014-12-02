@@ -33,6 +33,8 @@
 
 #include "apr_version.h"
 
+#include "msc_remote_rules.h"
+
 #if defined(WITH_LUA)
 #include "msc_lua.h"
 #endif
@@ -66,6 +68,11 @@ unsigned long int DSOLOCAL msc_pcre_match_limit = 0;
 
 unsigned long int DSOLOCAL msc_pcre_match_limit_recursion = 0;
 
+#ifdef WITH_REMOTE_RULES_SUPPORT
+msc_remote_rules_server DSOLOCAL *remote_rules_server = NULL;
+#endif
+int DSOLOCAL remote_rules_fail_action = REMOTE_RULES_ABORT_ON_FAIL;
+
 int DSOLOCAL status_engine_state = STATUS_ENGINE_DISABLED;
 
 int DSOLOCAL conn_limits_filter_state = MODSEC_DISABLED;
@@ -77,6 +84,7 @@ TreeRoot DSOLOCAL *conn_read_state_suspicious_list = 0;
 unsigned long int DSOLOCAL conn_write_state_limit = 0;
 TreeRoot DSOLOCAL *conn_write_state_whitelist = 0;
 TreeRoot DSOLOCAL *conn_write_state_suspicious_list = 0;
+
 
 #if defined(WIN32) || defined(VERSION_NGINX)
 int (*modsecDropAction)(request_rec *r) = NULL;
@@ -750,6 +758,26 @@ static int hook_post_config(apr_pool_t *mp, apr_pool_t *mp_log, apr_pool_t *mp_t
             ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
                     "Status engine is currently disabled, enable it by set " \
                     "SecStatusEngine to On.");
+        }
+#endif
+
+#ifdef WITH_REMOTE_RULES_SUPPORT
+        if (remote_rules_server != NULL)
+        {
+            if (remote_rules_server->amount_of_rules == 1)
+            {
+                ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                    "ModSecurity: Loaded %d rule from: '%s'.",
+                    remote_rules_server->amount_of_rules,
+                    remote_rules_server->uri);
+            }
+            else
+            {
+                ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                    "ModSecurity: Loaded %d rules from: '%s'.",
+                    remote_rules_server->amount_of_rules,
+                    remote_rules_server->uri);
+            }
         }
 #endif
     }

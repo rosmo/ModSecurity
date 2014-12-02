@@ -17,6 +17,7 @@ mkdir "%X86%"
 set VCARGS32="C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\vcvars32.bat"
 set VCARGS64="C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\vcvarsx86_amd64.bat"
 
+set SSDEEP_ARCH="x64"
 call build_dependencies.bat %VCARGS64%
 @if NOT (%ERRORLEVEL%) == (0) goto build_failed
 call build_modsecurity.bat %VCARGS64%
@@ -32,8 +33,12 @@ copy "%OUTPUT_DIR%\mlogc.exe" "%AMD64%"
 copy "%OUTPUT_DIR%\ModSecurityIIS.dll" "%AMD64%"
 copy "%OUTPUT_DIR%\pcre.dll" "%AMD64%"
 copy "%OUTPUT_DIR%\zlib1.dll" "%AMD64%"
+copy "%OUTPUT_DIR%\yajl.dll" "%AMD64%"
+copy "%OUTPUT_DIR%\fuzzy.dll" "%AMD64%"
+copy "%OUTPUT_DIR%\libeay32.dll" "%AMD64%"
+copy "%OUTPUT_DIR%\ssleay32.dll" "%AMD64%"
 
-
+set SSDEEP_ARCH="x86"
 call build_dependencies.bat %VCARGS32%
 @if NOT (%ERRORLEVEL%) == (0) goto build_failed
 call build_modsecurity.bat %VCARGS32%
@@ -47,8 +52,12 @@ copy "%OUTPUT_DIR%\libxml2.dll" "%X86%"
 copy "%OUTPUT_DIR%\lua5.1.dll" "%X86%"
 copy "%OUTPUT_DIR%\mlogc.exe" "%X86%"
 copy "%OUTPUT_DIR%\ModSecurityIIS.dll" "%X86%"
-copy %OUTPUT_DIR%\pcre.dll "%X86%"
-copy %OUTPUT_DIR%\zlib1.dll "%X86%"
+copy "%OUTPUT_DIR%\pcre.dll" "%X86%"
+copy "%OUTPUT_DIR%\zlib1.dll" "%X86%"
+copy "%OUTPUT_DIR%\yajl.dll" "%X86%"
+copy "%OUTPUT_DIR%\fuzzy.dll" "%X86%"
+copy "%OUTPUT_DIR%\libeay32.dll" "%X86%"
+copy "%OUTPUT_DIR%\ssleay32.dll" "%X86%"
 
 
 :: copy %OUTPUT_DIR%\Installer.exe %RELEASE_DIR%
