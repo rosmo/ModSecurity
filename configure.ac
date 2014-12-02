@@ -6,7 +6,7 @@ dnl
 
 AC_PREREQ(2.63)
 
-AC_INIT([modsecurity], [2.8], [support@modsecurity.org])
+AC_INIT([modsecurity], [2.9], [support@modsecurity.org])
 
 AC_CONFIG_MACRO_DIR([build])
 AC_CONFIG_SRCDIR([LICENSE])
@@ -694,9 +694,9 @@ CHECK_APU()
 fi
 CHECK_LIBXML2()
 CHECK_LUA()
-if test "$build_mlogc" -ne 0; then
+#if test "$build_mlogc" -ne 0; then
 CHECK_CURL()
-fi
+#fi
 
 # Check for YAJL libs (for JSON body processor)
 CHECK_YAJL()
