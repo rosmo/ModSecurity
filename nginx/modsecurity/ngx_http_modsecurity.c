@@ -820,11 +820,11 @@ ngx_http_modsecurity_save_headers_out_visitor(void *data,
         const char *key, const char *value)
 {
     ngx_http_request_t             *r = data;
-    ngx_table_elt_t                *h, he;
-    ngx_http_upstream_header_t     *hh;
-    ngx_http_upstream_main_conf_t  *umcf;
+    ngx_table_elt_t                *h, he, *new_h;
+    //ngx_http_upstream_header_t     *hh;
+    //ngx_http_upstream_main_conf_t  *umcf;
 
-    umcf = ngx_http_get_module_main_conf(r, ngx_http_upstream_module);
+    //umcf = ngx_http_get_module_main_conf(r, ngx_http_upstream_module);
 
     h = &he;
 
@@ -843,15 +843,36 @@ ngx_http_modsecurity_save_headers_out_visitor(void *data,
 
     h->hash = ngx_hash_key(h->lowcase_key, h->key.len);
 
-    hh = ngx_hash_find(&umcf->headers_in_hash, h->hash,
-                       h->lowcase_key, h->key.len);
+    //hh = ngx_hash_find(&umcf->headers_in_hash, h->hash,
+    //                   h->lowcase_key, h->key.len);
 
-    if (hh) {
-        /* copy all */
-        if (hh->copy_handler(r, h, hh->conf) != NGX_OK) {
-            return 0;
-        }
+    // While using proxy_pass with a combination of other factores
+    // there seems to be a memory corruption if we use hh->copy_handler.
+    // Temporary using new_h. This demand a further investigation.
+    //
+    //if (hh) {
+    //    /* copy all */
+    //    if (hh->copy_handler(r, h, hh->conf) != NGX_OK) {
+    //        return 0;
+    //    }
+    //} else {
+    
+    /* Add the response header directly to headers_out if not present in
+     * the hash. This is done to passthrough such response headers.
+     * Remember the response headers were cleared earlier using
+     * ngx_http_clean_header(r) call in ngx_http_modsecurity_save_headers_out.
+     */
+
+    new_h = ngx_list_push(&r->headers_out.headers);
+    if (new_h == NULL) {
+        return NGX_ERROR;
     }
+
+    new_h->hash = h->hash;
+    new_h->key = h->key;
+    new_h->value = h->value;
+
+   // }
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "ModSecurity: save headers out: \"%V: %V\"",
@@ -1411,7 +1432,7 @@ ngx_http_modsecurity_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
                    "ModSecurity: save headers out done: done");
 
 
-    if (r->headers_out.content_length_n != -1) {
+    if (r->headers_out.content_length_n != -1 && r->method != NGX_HTTP_HEAD) {
 
         r->headers_out.content_length_n = content_length;
         r->headers_out.content_length = NULL; /* header filter will set this */
