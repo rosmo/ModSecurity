@@ -224,6 +224,14 @@ AC_ARG_ENABLE(mlogc,
 [
   build_mlogc=1
 ])
+
+CHECK_CURL()
+
+if test -z "${CURL_VERSION}"; then
+  AC_MSG_NOTICE([NOTE: mlgoc compilation was disabled.])
+  build_mlogc=0
+fi
+
 AM_CONDITIONAL([BUILD_MLOGC], [test "$build_mlogc" -eq 1])
 if test "$build_mlogc" -eq 1; then
   TOPLEVEL_SUBDIRS="$TOPLEVEL_SUBDIRS mlogc"
@@ -695,14 +703,34 @@ fi
 CHECK_LIBXML2()
 CHECK_LUA()
 #if test "$build_mlogc" -ne 0; then
-CHECK_CURL()
+#CHECK_CURL()
 #fi
 
 # Check for YAJL libs (for JSON body processor)
 CHECK_YAJL()
 #AC_SEARCH_LIBS([yajl_alloc], [yajl])
 CHECK_SSDEEP()
-AC_SEARCH_LIBS([fuzzy_hash_buf], [fuzzy])
+#AC_SEARCH_LIBS([fuzzy_hash_buf], [fuzzy])
+
+CFLAGS="$CFLAGS $APU_CFLAGS"
+AC_TRY_COMPILE(
+	[#include <apr_crypto.h>],
+	[
+          #if APU_HAVE_CRYPTO == 0
+          #error APR util was not compiled with crypto support.
+          #endif
+	],
+	[ AC_DEFINE([WITH_APU_CRYPTO], [1], [APR util was compiled with crypto support])
+	  MODSEC_EXTRA_CFLAGS="$MODSEC_EXTRA_CFLAGS -DWITH_APU_CRYPTO"
+	],
+	[ AC_MSG_WARN([APR util was not compiled with crypto support. SecRemoteRule will not support the parameter 'crypto']) ]
+)
+
+# Current our unique download backend is curl, furhter we can support more.
+if test ! -z "${CURL_VERSION}"; then
+  AC_DEFINE([WITH_REMOTE_RULES], [1], [Enables SecRemoteRules support])
+  MODSEC_EXTRA_CFLAGS="$MODSEC_EXTRA_CFLAGS -DWITH_REMOTE_RULES"
+fi
 
 AC_CONFIG_FILES([Makefile])
 AC_CONFIG_FILES([tools/Makefile])
@@ -723,6 +751,9 @@ AC_CONFIG_FILES([build/apxs-wrapper], [chmod +x build/apxs-wrapper])
 if test -e "$PERL"; then
     if test "$build_mlogc" -ne 0; then
         AC_CONFIG_FILES([mlogc/mlogc-batch-load.pl], [chmod +x mlogc/mlogc-batch-load.pl])
+        AC_CONFIG_FILES([tests/regression/misc/40-secRemoteRules.t])
+        AC_CONFIG_FILES([tests/regression/misc/50-ipmatchfromfile-external.t])
+        AC_CONFIG_FILES([tests/regression/misc/60-pmfromfile-external.t])
     fi
     AC_CONFIG_FILES([tests/run-unit-tests.pl], [chmod +x tests/run-unit-tests.pl])
     AC_CONFIG_FILES([tests/run-regression-tests.pl], [chmod +x tests/run-regression-tests.pl])

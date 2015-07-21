@@ -52,7 +52,6 @@ typedef struct msc_parm msc_parm;
 #include "apr_md5.h"
 #include "apr_strings.h"
 #include "apr_hash.h"
-#include "apr_crypto.h"
 #include "httpd.h"
 #include "http_config.h"
 #include "http_log.h"
@@ -146,10 +145,11 @@ extern DSOLOCAL unsigned long int msc_pcre_match_limit;
 
 extern DSOLOCAL unsigned long int msc_pcre_match_limit_recursion;
 
-#ifdef WITH_REMOTE_RULES_SUPPORT
+#ifdef WITH_REMOTE_RULES
 extern DSOLOCAL msc_remote_rules_server *remote_rules_server;
 #endif
 extern DSOLOCAL int remote_rules_fail_action;
+extern DSOLOCAL char *remote_rules_fail_message;
 
 extern DSOLOCAL int status_engine_state;
 

@@ -23,7 +23,8 @@
 #include "msc_util.h"
 #include "msc_tree.h"
 #include "msc_crypt.h"
-#include "curl/curl.h"
+#include "msc_remote_rules.h"
+#include "msc_status_engine.h"
 #include <apr_sha1.h>
 
 #if APR_HAVE_ARPA_INET_H
@@ -196,19 +197,32 @@ static int msre_op_ipmatchFromFile_param_init(msre_rule *rule, char **error_msg)
     }
     filepath = fn;
 
-    if (strlen(fn) > strlen("http://") && strncmp(fn, "http://", strlen("http://")) == 0)
+    if (strlen(fn) > strlen("http://") &&
+            strncmp(fn, "http://", strlen("http://")) == 0)
     {
         *error_msg = apr_psprintf(rule->ruleset->mp, "HTTPS address or file " \
             "path are expected for operator ipmatchFromFile \"%s\"", fn);
         return 0;
     }
-    else if (strlen(fn) > strlen("https://") && strncmp(fn, "https://", strlen("https://")) == 0)
+    else if (strlen(fn) > strlen("https://") &&
+            strncmp(fn, "https://", strlen("https://")) == 0)
     {
+#ifdef WITH_CURL
         res = ip_tree_from_uri(&rtree, fn, rule->ruleset->mp, error_msg);
-        if (res)
+        if (res == -2)
+        {
+            /* Failed to download but we won't stop the webserver to start. */
+            return 1;
+        }
+        else if (res)
         {
             return 0;
         }
+#else
+        *error_msg = apr_psprintf(rule->ruleset->mp, "ModSecurity was not " \
+            "compiled with Curl support, it cannot load: \"%s\"", fn);
+        return 0;
+#endif
     }
     else
     {
@@ -253,8 +267,12 @@ static int msre_op_ipmatchFromFile_execute(modsec_rec *msr, msre_rule *rule,
     else
         *error_msg = NULL;
 
-    if(rtree == NULL) {
-        msr_log(msr, 1, "ipMatchFromFile Internal Error: tree value is null.");
+    if (rtree == NULL)
+    {
+        if (msr->txcfg->debuglog_level >= 6)
+        {
+            msr_log(msr, 1, "ipMatchFromFile: tree value is null.");
+        }
         return 0;
     }
 
@@ -1257,117 +1275,34 @@ static int msre_op_pmFromFile_param_init(msre_rule *rule, char **error_msg) {
         /* Add path of the rule filename for a relative phrase filename */
         filepath = fn;
 
-        if (strlen(fn) > strlen("http://") && strncmp(fn, "http://", strlen("http://")) == 0)
+        if (strlen(fn) > strlen("http://") &&
+            strncmp(fn, "http://", strlen("http://")) == 0)
         {
             *error_msg = apr_psprintf(rule->ruleset->mp, "HTTPS address or " \
-		"file path are expected for operator pmFromFile \"%s\"", fn);
+		        "file path are expected for operator pmFromFile \"%s\"", fn);
             return 0;
         }
-        else if (strlen(fn) > strlen("https://") && strncmp(fn, "https://", strlen("https://")) == 0)
+        else if (strlen(fn) > strlen("https://") &&
+            strncmp(fn, "https://", strlen("https://")) == 0)
         {
-            CURL *curl;
-            CURLcode res;
-
-            char id[(APR_SHA1_DIGESTSIZE*2) + 1];
-            char *apr_id = NULL;
-            char *beacon_str = NULL;
-            int beacon_str_len = 0;
-            char *beacon_apr = NULL;
-
-            struct msc_curl_memory_buffer_t chunk;
+#ifdef WITH_CURL
+            int res = 0;
             char *word = NULL;
             char *brkt = NULL;
             char *sep = "\n";
+            struct msc_curl_memory_buffer_t chunk;
 
-            /* Retrieve the beacon string */
-            beacon_str_len = msc_beacon_string(NULL, 0);
-
-            beacon_str = malloc(sizeof(char) * beacon_str_len + 1);
-            if (beacon_str == NULL) {
-                beacon_str = "Failed to retrieve beacon string";
-                beacon_apr = apr_psprintf(rule->ruleset->mp, "ModSec-status: %s", beacon_str);
-            }
-            else
+            res = msc_remote_download_content(rule->ruleset->mp, fn, NULL,
+                    &chunk, error_msg);
+            if (res == -2)
             {
-                msc_beacon_string(beacon_str, beacon_str_len);
-                beacon_apr = apr_psprintf(rule->ruleset->mp, "ModSec-status: %s", beacon_str);
-                free(beacon_str);
+                /* If download failed but SecRemoteRulesFailAction is set to Warn. */
+                return 1;
             }
-
-            memset(id, '\0', sizeof(id));
-            if (msc_status_engine_unique_id(id)) {
-              sprintf(id, "no unique id");
+            else if (res < 0)
+            {
+                return 0;
             }
-
-            apr_id = apr_psprintf(rule->ruleset->mp, "ModSec-unique-id: %s", id);
-
-            chunk.memory = malloc(1);  /* will be grown as needed by the realloc above */ 
-            chunk.size = 0;    /* no data at this point */ 
-            curl_global_init(CURL_GLOBAL_ALL);
-            curl = curl_easy_init();
-
-            if (curl) {
-                struct curl_slist *headers_chunk = NULL;
-#ifdef WIN32
-                char *buf = malloc(sizeof(TCHAR) * (2048 + 1));
-                char *ptr = NULL;
-                DWORD res_len;
-#endif
-                curl_easy_setopt(curl, CURLOPT_URL, fn);
-
-                headers_chunk = curl_slist_append(headers_chunk, apr_id);
-                headers_chunk = curl_slist_append(headers_chunk, beacon_apr);
-
-                /* send all data to this function  */
-                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, msc_curl_write_memory_cb);
-
-                /* we pass our 'chunk' struct to the callback function */
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-                /* Make it TLS 1.x only. */
-                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1);
-
-#ifdef WIN32
-                res_len = SearchPathA(NULL, "curl-ca-bundle.crt", NULL, (2048 + 1), buf, &ptr);
-                if (res_len > 0) {
-                    curl_easy_setopt(curl, CURLOPT_CAINFO, strdup(buf));
-                }
-                free(buf);
-#endif
-
-                /* those are the default options, but lets make sure */
-                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1);
-                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 1);
-
-                /* some servers don't like requests that are made without a user-agent
-                   field, so we provide one */
-                curl_easy_setopt(curl, CURLOPT_USERAGENT, "ModSecurity");
-                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_chunk);
-
-                res = curl_easy_perform(curl);
-
-                if (res != CURLE_OK)
-                {
-                    if (remote_rules_fail_action == REMOTE_RULES_WARN_ON_FAIL)
-                    {
-                        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                            "Failed to fetch \"%s\" error: %s ", fn,
-                            curl_easy_strerror(res));
-                        return 1;
-                    }
-                    else
-                    {
-                        *error_msg = apr_psprintf(rule->ruleset->mp,
-                            "Failed to fetch \"%s\" error: %s ", fn,
-                            curl_easy_strerror(res));
-                        return 0;
-                    }
-                }
-
-                curl_easy_cleanup(curl);
-                curl_slist_free_all(headers_chunk);
-            }
-            curl_global_cleanup();
 
             for (word = strtok_r(chunk.memory, sep, &brkt);
                  word;
@@ -1377,8 +1312,13 @@ static int msre_op_pmFromFile_param_init(msre_rule *rule, char **error_msg) {
                 if (*word == '#') continue;
 
                 acmp_add_pattern(p, word, NULL, NULL, strlen(word));
-
             }
+            msc_remote_clean_chunk(&chunk);
+#else
+            *error_msg = apr_psprintf(rule->ruleset->mp, "ModSecurity was not " \
+		        "compiled with Curl support, it cannot load: \"%s\"", fn);
+            return 0;
+#endif
         }
         else
         {
@@ -1457,6 +1397,16 @@ static int msre_op_pm_execute(modsec_rec *msr, msre_rule *rule, msre_var *var, c
 
     /* Are we supposed to capture subexpressions? */
     capture = apr_table_get(rule->actionset->actions, "capture") ? 1 : 0;
+
+    if (rule->op_param_data == NULL)
+    {
+        if (msr->txcfg->debuglog_level >= 6)
+        {
+            msr_log(msr, 1, "ACMPTree is null.");
+        }
+
+        return 0;
+    }
 
     pt.parser = (ACMP *)rule->op_param_data;
     pt.ptr = NULL;
@@ -3994,8 +3944,9 @@ static int msre_op_fuzzy_hash_execute(modsec_rec *msr, msre_rule *rule,
         if (i >= param->threshold)
         {
             *error_msg = apr_psprintf(msr->mp, "Fuzzy hash of %s matched " \
-                "with %s (from: %s). Socore: %d.", var->name, line,
+                "with %s (from: %s). Score: %d.", var->name, line,
                 param->file, i);
+            fclose(fp);
             return 1;
         }
     }

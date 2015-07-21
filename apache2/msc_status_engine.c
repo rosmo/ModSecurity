@@ -349,7 +349,13 @@ int DSOLOCAL msc_beacon_string (char *beacon_string, int beacon_string_max_len) 
 #endif
     libxml = LIBXML_DOTTED_VERSION;
     modsec = MODSEC_VERSION;
+#ifdef VERSION_IIS
+    apache = "IIS";
+#elif VERSION_NGINX
+    apache = "nginx";
+#else
     apache = real_server_signature;
+#endif
 
     /* 6 represents: strlen("(null)") */
     beacon_string_len = (modsec ? strlen(modsec) : 6) +

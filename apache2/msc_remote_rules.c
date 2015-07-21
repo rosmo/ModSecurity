@@ -16,17 +16,53 @@
 #include "msc_status_engine.h"
 
 #include <apr_thread_pool.h>
+
+#ifdef WITH_CURL
 #include <curl/curl.h>
+#endif
 
 #include <apu.h>
+
+#ifdef WITH_REMOTE_RULES
+#ifdef WITH_APU_CRYPTO
 #include <apr_crypto.h>
+#endif
 #include <apr_sha1.h>
+#endif
 
 #ifndef AP_MAX_ARGC
 #define AP_MAX_ARGC 64
 #endif
 
-#ifdef WITH_REMOTE_RULES_SUPPORT
+/**
+ * @brief Find command in a list.
+ *
+ * This is a duplicate of `ap_find_command', which is part of the standalone module.
+ * Apache versions does not include the standalone, thus, this is necessary for
+ * the Apache versions. Once it is here it may not be necessary to be part of
+ * the standalone module, but, for this version both function will co-exist
+ * avoiding problems with 3rd parties that are extending the standalone module.
+ *
+ * @note Prefer this function instead of `ap_finc_command` which is part of the
+ *       standalone module.
+ *
+ * @param parms char pointer, function name.
+ * @param cmds pointer to command_rec[].
+ * @retval NULL if command was not found.
+ *
+ */
+const command_rec *msc_remote_find_command(const char *name, const command_rec *cmds)
+{
+    while (cmds->name) {
+        if (!strcasecmp(name, cmds->name))
+            return cmds;
+
+        ++cmds;
+    }
+
+    return NULL;
+}
+
 
 /**
  * @brief Insert a new SecRule to be processed by ModSecurity
@@ -201,6 +237,7 @@ const char *msc_remote_invoke_cmd(const command_rec *cmd, cmd_parms *parms,
                            NULL);
     }
 }
+
 /**
  * @brief Fetch an URL and fill the content into a memory buffer.
  *
@@ -225,11 +262,14 @@ const char *msc_remote_invoke_cmd(const command_rec *cmd, cmd_parms *parms,
  *
  * @retval n>=0 everything went fine.
  * @retval n<-1 Something wrong happened, further details on error_msg.
+ *         n=-2 Download failed, but operation should not be aborted.
+ *         n=-3 ModSecurity was not compiled with curl support.
  *
  */
-int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
+int msc_remote_download_content(apr_pool_t *mp, const char *uri, const char *key,
     struct msc_curl_memory_buffer_t *chunk, char **error_msg)
 {
+#ifdef WITH_CURL
     CURL *curl;
     CURLcode res;
 
@@ -237,8 +277,10 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
     char *apr_id = NULL;
     char *beacon_str = NULL;
     char *beacon_apr = NULL;
-    char *header_key = NULL;
     int beacon_str_len = 0;
+    int ret = 0;
+
+    chunk->size = 0;
 
     memset(id, '\0', sizeof(id));
     if (msc_status_engine_unique_id(id))
@@ -248,7 +290,6 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
 
     apr_id = apr_psprintf(mp, "ModSec-unique-id: %s", id);
 
-    curl_global_init(CURL_GLOBAL_ALL);
     curl = curl_easy_init();
 
     beacon_str_len = msc_beacon_string(NULL, 0);
@@ -266,11 +307,6 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
         free(beacon_str);
     }
 
-    if (key != NULL)
-    {
-        header_key = apr_psprintf(mp, "ModSec-key: %s", key);
-    }
-
     if (curl)
     {
         struct curl_slist *headers_chunk = NULL;
@@ -279,12 +315,14 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
         char *ptr = NULL;
         DWORD res_len;
 #endif
-        curl_easy_setopt(curl, CURLOPT_URL, remote_rules_server->uri);
+        curl_easy_setopt(curl, CURLOPT_URL, uri);
 
         headers_chunk = curl_slist_append(headers_chunk, apr_id);
         headers_chunk = curl_slist_append(headers_chunk, beacon_apr);
         if (key != NULL)
         {
+            char *header_key = NULL;
+            header_key = apr_psprintf(mp, "ModSec-key: %s", key);
             headers_chunk = curl_slist_append(headers_chunk, header_key);
         }
 
@@ -309,10 +347,11 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
         /* we pass our 'chunk' struct to the callback function */
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)chunk);
 
-        /* some servers don't like requests that are made without a user-agent
-           field, so we provide one */
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "modesecurity");
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_chunk);
+
+        /* We want Curl to return error in case there is an HTTP error code */
+        curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1);
 
         res = curl_easy_perform(curl);
 
@@ -320,28 +359,42 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
         {
             if (remote_rules_fail_action == REMOTE_RULES_WARN_ON_FAIL)
             {
-                 ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                         "Failed to fetch \"%s\" error: %s ",
-                         remote_rules_server->uri, curl_easy_strerror(res));
+                if (remote_rules_fail_message == NULL)
+                {
+                    remote_rules_fail_message = "";
+                }
+
+                remote_rules_fail_message = apr_psprintf(mp, "%sFailed to " \
+                            "download: \"%s\" error: %s. ",
+                            remote_rules_fail_message, uri,
+                            curl_easy_strerror(res));
+
+                ret = -2;
+                goto failed;
             }
             else
             {
-                *error_msg = apr_psprintf(mp, "Failed to fetch \"%s\" " \
+                *error_msg = apr_psprintf(mp, "Failed to download: \"%s\" " \
                     "error: %s ",
-                    remote_rules_server->uri, curl_easy_strerror(res));
-            }
+                    uri, curl_easy_strerror(res));
 
-            return -1;
+                ret = -1;
+                goto failed;
+            }
         }
 
         curl_slist_free_all(headers_chunk);
     }
 
+failed:
     curl_easy_cleanup(curl);
 
-    curl_global_cleanup();
-    return 0;
+    return ret;
+#else
+    return -3;
+#endif
 }
+
 
 /**
  * @brief Setup an apr_crypto_key_t from a given password and salt.
@@ -369,6 +422,7 @@ int msc_remote_grab_content(apr_pool_t *mp, const char *uri, const char *key,
  * @retval n<-1 Something wrong happened, check error_msg for further details.
  *
  */
+#ifdef WITH_APU_CRYPTO
 int msc_remote_enc_key_setup(apr_pool_t *pool,
     const char *key,
     apr_crypto_key_t **apr_key,
@@ -411,11 +465,6 @@ int msc_remote_enc_key_setup(apr_pool_t *pool,
         *error_msg = "Internal error - apr_crypto_passphrase: APR_EKEYTYPE";
         return -1;
     }
-    else if (rv == APR_EKEYTYPE)
-    {
-        *error_msg = "Internal error - apr_crypto_passphrase: APR_EKEYTYPE";
-        return -1;
-    }
     else if (rv != APR_SUCCESS)
     {
         *error_msg = "Internal error - apr_crypto_passphrase: Unknown error";
@@ -424,6 +473,7 @@ int msc_remote_enc_key_setup(apr_pool_t *pool,
 
     return 0;
 }
+#endif
 
 /**
  * @brief Decrypt an buffer into a memory buffer.
@@ -449,6 +499,7 @@ int msc_remote_enc_key_setup(apr_pool_t *pool,
  * @retval n<-1 Something wrong happened, further details on error_msg.
  *
  */
+#ifdef WITH_APU_CRYPTO
 int msc_remote_decrypt(apr_pool_t *pool,
         const char *key,
         struct msc_curl_memory_buffer_t *chunk,
@@ -488,12 +539,9 @@ int msc_remote_decrypt(apr_pool_t *pool,
         return -1;
     }
 
-#ifndef APU_CRYPTO_RECOMMENDED_DRIVER
-    rv = apr_crypto_get_driver(&driver, "openssl", NULL, &err, pool);
-#else
     rv = apr_crypto_get_driver(&driver, APU_CRYPTO_RECOMMENDED_DRIVER, NULL,
             &err, pool);
-#endif
+
     if (rv != APR_SUCCESS || driver == NULL)
     {
         *error_msg = "Internal error - apr_crypto_get_driver: Unknown error";
@@ -570,10 +618,15 @@ int msc_remote_decrypt(apr_pool_t *pool,
     }
 
     apr_crypto_block_cleanup(block);
+    apr_crypto_cleanup(f);
+
+    // Shutdown the apr_crypto seems to be the correct thing to do.
+    // However it seems to add instability especially if mod_ssl is enabled.
+    // apr_crypto_shutdown(driver);
 
     return 0;
 }
-
+#endif
 
 /**
  * @brief Add SecRules from a given URI.
@@ -598,7 +651,9 @@ int msc_remote_add_rules_from_uri(cmd_parms *orig_parms,
         msc_remote_rules_server *remote_rules_server,
         char **error_msg)
 {
-    struct msc_curl_memory_buffer_t chunk_encrypted;
+
+#ifdef WITH_REMOTE_RULES
+    struct msc_curl_memory_buffer_t downloaded_content;
     unsigned char *plain_text = NULL;
     int len = 0;
     int start = 0;
@@ -609,16 +664,15 @@ int msc_remote_add_rules_from_uri(cmd_parms *orig_parms,
 
     apr_pool_t *mp = orig_parms->pool;
 
-    chunk_encrypted.size = 0;
-    chunk_encrypted.memory = NULL;
+    downloaded_content.size = 0;
+    downloaded_content.memory = NULL;
 
-    res = msc_remote_grab_content(mp, remote_rules_server->uri,
-            remote_rules_server->key, &chunk_encrypted, error_msg);
+    res = msc_remote_download_content(mp, remote_rules_server->uri,
+            remote_rules_server->key, &downloaded_content, error_msg);
     if (*error_msg != NULL)
     {
         return -1;
     }
-
     /* error_msg is not filled when the user set SecRemoteRulesFailAction
      * to warn
      */
@@ -629,20 +683,27 @@ int msc_remote_add_rules_from_uri(cmd_parms *orig_parms,
 
     if (remote_rules_server->crypto == 1)
     {
-        msc_remote_decrypt(mp, remote_rules_server->key, &chunk_encrypted,
+#ifdef WITH_APU_CRYPTO
+        msc_remote_decrypt(mp, remote_rules_server->key, &downloaded_content,
             &plain_text,
             &plain_text_len,
             error_msg);
+
         if (*error_msg != NULL)
         {
+            msc_remote_clean_chunk(&downloaded_content);
             return -1;
         }
-
-        msc_remote_clean_chunk(&chunk_encrypted);
+#else
+        *error_msg = "ModSecurity was not compiled with crypto support.\n";
+        msc_remote_clean_chunk(&downloaded_content);
+        return -1;
+#endif
+        msc_remote_clean_chunk(&downloaded_content);
     }
     else
     {
-        plain_text = chunk_encrypted.memory;
+        plain_text = downloaded_content.memory;
         plain_text_len = strlen(plain_text);
     }
 
@@ -654,9 +715,10 @@ int msc_remote_add_rules_from_uri(cmd_parms *orig_parms,
         {
             const char *rule = NULL;
             int tmp = len;
-            char *cmd_name;
-            char *word;
+            char *cmd_name = NULL;
+            char *word = NULL;
             const command_rec *cmd;
+
             ap_directive_t *newdir;
             cmd_parms *parms = apr_pcalloc(mp, sizeof (cmd_parms));
 
@@ -672,7 +734,7 @@ int msc_remote_add_rules_from_uri(cmd_parms *orig_parms,
             }
 
             cmd_name = ap_getword_conf(mp, &rule);
-            cmd = ap_find_command(cmd_name, security2_module.cmds);
+            cmd = msc_remote_find_command(cmd_name, security2_module.cmds);
 
             if (cmd == NULL)
             {
@@ -721,16 +783,21 @@ next:
 
     remote_rules_server->amount_of_rules = added_rules;
 
-    if (remote_rules_server->crypto == 1)
+    if (remote_rules_server->crypto != 1)
     {
-        msc_remote_clean_chunk(&chunk_encrypted);
+        msc_remote_clean_chunk(&downloaded_content);
     }
+#else
+    *error_msg = "SecRemoteRules was not enabled during ModSecurity " \
+        "compilation.";
+    return -1;
+#endif
 }
 
 
 int msc_remote_clean_chunk(struct msc_curl_memory_buffer_t *chunk)
 {
-    if (chunk->size <= 0)
+    if (chunk->size == 0)
     {
         goto end;
     }
@@ -747,4 +814,3 @@ end:
     return 0;
 }
 
-#endif

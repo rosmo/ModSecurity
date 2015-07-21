@@ -1,3 +1,40 @@
+DD mmm YYYY - X.Y.Z (To be released)
+------------------------------------
+
+ * Fix compilation problem while ssdeep is installed in non-standard
+   location.
+   [Issude #872 - Kurt Newman]
+ * Fix invalid storage reference by apr_psprintf at msc_crypt.c
+   [Issue #609 - Jeff Trawick]
+
+12 Feb 2015 - 2.9.0
+-------------------
+
+ * Fix apr_crypto.h include, now checking if apr_crypto.h is available by
+   checking the definition WITH_APU_CRYPTO.
+   [martinjina and ModSecurity team]
+
+15 Dez 2014 - 2.9.0-RC2
+-----------------------
+
+ * OpenSSL dependency was removed on MS Windows builds. ModSecurity is now using
+   the Windows certificate storage.
+   [Gregg Smith, Steffen and ModSecurity team]
+ * Informs about external resources loaded/failed while reloading Apache.
+   [ModSecurity team]
+ * Adds missing 'ModSecurity:' prefix in some warnings messages.
+   [Walter Hop and ModSecurity team]
+ * Refactoring external resources download warn messages. Holding the message
+   to be displayed when Apache is ready to write on the error_log.
+   [ModSecurity team]
+ * Remote resources loading process is now failing in case of HTTP error.
+   [Walter Hop and ModSecurity team]
+ * Fixed start up crash on Apache with mod_ssl configured. Crash was happening
+   during the download of remote resources.
+   [Christian Folini, Walter Hop and ModSecurity team]
+ * Curl is not a mandatory dependency to ModSecurity core anymore.
+   [Rainer Jung and ModSecurity team]
+
 18 Nov 2014 - 2.9.0-RC1
 -----------------------
 
